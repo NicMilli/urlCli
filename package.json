@@ -1,0 +1,14 @@
+{
+  "name": "urlcli",
+  "version": "1.0.0",
+  "description": "Takes in a url, prints out resource at url in standard output",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "bin": {
+    "url": "index.js"
+  },
+  "author": "Nicholas Milligan",
+  "license": "ISC"
+}
