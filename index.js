@@ -25,12 +25,12 @@ stdin.setEncoding('utf8');
 
 const logLines = (line) => {
   // exit once all lines have been printed
-  if (line > lines.length) {
+  if (line >= lines.length) {
     process.exit();
   }
 
   // Log the line preceeded by the line number
-  console.log(line, ' :', lines[line]);
+  console.log(line + 1, ' :', lines[line]);
   // Track the time, so that the rhythm is not broken when accelerating
   // or decelerating cadence
   lastLog = Date.now();
@@ -162,8 +162,9 @@ try {
     res.on('end', () => {
       // If text received
       if (content.includes('text')) {
-        lines = Buffer.concat(data).toString().split('\n');
-        logLines(1);
+        const resource = Buffer.concat(data).toString();
+        lines = resource.split('\n');
+        logLines(0);
       } else {
         buf = Buffer.concat(data);
         resourceLength = (new TextEncoder().encode(buf.toString())).length;
