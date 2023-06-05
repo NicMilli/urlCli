@@ -3,13 +3,16 @@
 // use node's built in https module to make requests
 const https = require('https');
 
-// Define global variables
+// Define scoped variables
 let lastLog;
 let lineTimeout;
 let lines;
 let resourceLength;
 let lastByte;
 let buf;
+let cadence = 1000;
+let lineNo = 1;
+let paused = false;
 
 const { stdin } = process;
 // ensure stream is received before enter is pressed
@@ -20,55 +23,52 @@ stdin.resume();
 // handle binary inputs
 stdin.setEncoding('utf8');
 
-let resource;
-let cadence = 1000;
-let lineNo = 1;
-let paused = false;
-
 const logLines = (line) => {
+  // exit once all lines have been printed
   if (line > lines.length) {
     process.exit();
   }
 
+  // Log the line preceeded by the line number
   console.log(line, ' :', lines[line]);
+  // Track the time, so that the rhythm is not broken when accelerating
+  // or decelerating cadence
   lastLog = Date.now();
+  // Track the line number to resume after pausing
   lineNo = line;
 
+  // Set the next line to be printed after allotted time
   lineTimeout = setTimeout(() => {
     logLines.call(this, line + 1);
   }, cadence);
 };
 
 const logBytes = (byte, current = []) => {
+  // If program is currently paused, end the recursion
   if (paused === true) {
     return;
   }
 
+  // Log the line if the end of the resource has been reached, exit the process
   if (byte > resourceLength) {
-    console.log(current.join(' ').replace(/\s{2,20}/g, ' '));
+    // Replace carriage returns
+    console.log(current.join(' '));
     process.exit();
   }
 
+  // If current byte is a multiple of 16, add to the line and print
   if (byte % 16 === 0) {
     current.push(buf.toString('ascii', byte - 1, byte));
-    console.log(current.join(' ').replace(/\s{2,20}/g, ' '));
+
+    const hexString = (byte - 16).toString(16);
+    // ensure carriage return doesn't delete line no
+    console.log(hexString, ':', current.join(' ').replace(/[\n\r]/g, ''));
     lastLog = Date.now();
     lastByte = byte;
 
     lineTimeout = setTimeout(() => {
       logBytes(byte + 1);
     }, cadence);
-  } else if (byte % 16 === 1) {
-    // If the current byte is the start of a new line
-    // Get the hex offset and add it to the upcoming line
-    const hexString = (byte - 1).toString(16);
-    current.push(hexString);
-    current.push(':');
-    // Add the current byte
-    current.push(buf.toString('ascii', byte - 1, byte));
-
-    // Recursively call the function to
-    logBytes(byte + 1, current);
   } else {
     // Push the current byte to the upcoming line
     current.push(buf.toString('ascii', byte - 1, byte));
@@ -155,24 +155,18 @@ try {
     const content = res.headers['content-type'] || 'unknown';
 
     res.on('data', (chunk) => {
-      // console.log(line, '--->', chunk);
+      // aggregate chunks received into data array
       data.push(chunk);
     });
 
     res.on('end', () => {
+      // If text received
       if (content.includes('text')) {
-        resource = Buffer.concat(data).toString();
-        lines = resource.split('\n');
+        lines = Buffer.concat(data).toString().split('\n');
         logLines(1);
-      } else if (content.includes('json')) {
-        resource = JSON.parse(Buffer.concat(data).toString());
-        resourceLength = (new TextEncoder().encode(resource)).length;
-        buf = Buffer.concat(data);
-        logBytes(1);
       } else {
-        resource = Buffer.concat(data).toString();
-        resourceLength = (new TextEncoder().encode(resource)).length;
         buf = Buffer.concat(data);
+        resourceLength = (new TextEncoder().encode(buf.toString())).length;
         logBytes(1);
       }
     });
