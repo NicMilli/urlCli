@@ -3,7 +3,15 @@
 // use node's built in https module to make requests
 const https = require('https');
 
-var stdin = process.stdin;
+// Define global variables
+let lastLog;
+let lineTimeout;
+let lines;
+let resourceLength;
+let lastByte;
+let buf;
+
+const { stdin } = process;
 // ensure stream is received before enter is pressed
 stdin.setRawMode(true);
 
@@ -16,93 +24,157 @@ let resource;
 let cadence = 1000;
 let lineNo = 1;
 let paused = false;
-global.lastLog;
-global.lineTimeout;
-global.lines;
 
 const logLines = (line) => {
   if (line > lines.length) {
     process.exit();
   }
 
-  console.log(line, ':', lines[line]);
+  console.log(line, ' :', lines[line]);
   lastLog = Date.now();
   lineNo = line;
 
   lineTimeout = setTimeout(() => {
     logLines.call(this, line + 1);
   }, cadence);
-}
+};
 
-stdin.on('data', (key) => {
-  // ctrl+c to exit
-  if (key === '\u0003') {
+const logBytes = (byte, current = []) => {
+  if (paused === true) {
+    return;
+  }
+
+  if (byte > resourceLength) {
+    console.log(current.join(' ').replace(/\s{2,20}/g, ' '));
     process.exit();
   }
 
-  if (global.lineTimeout === 'undefined') {
-    console.log('Still fetching your resource');
-  }
+  if (byte % 16 === 0) {
+    current.push(buf.toString('ascii', byte - 1, byte));
+    console.log(current.join(' ').replace(/\s{2,20}/g, ' '));
+    lastLog = Date.now();
+    lastByte = byte;
 
-  if (key === ' ') {
-    if (!paused) {
-      clearTimeout(lineTimeout);
-      paused = true;
+    lineTimeout = setTimeout(() => {
+      logBytes(byte + 1);
+    }, cadence);
+  } else if (byte % 16 === 1) {
+    // If the current byte is the start of a new line
+    // Get the hex offset and add it to the upcoming line
+    const hexString = (byte - 1).toString(16);
+    current.push(hexString);
+    current.push(':');
+    // Add the current byte
+    current.push(buf.toString('ascii', byte - 1, byte));
+
+    // Recursively call the function to
+    logBytes(byte + 1, current);
+  } else {
+    // Push the current byte to the upcoming line
+    current.push(buf.toString('ascii', byte - 1, byte));
+    // Recursively call the function to add the next byte to current
+    logBytes(byte + 1, current);
+  }
+};
+
+stdin.on('data', (key) => {
+  // ctrl+c to exit the process
+  if (key === '\u0003') {
+    process.exit();
+  }
+  // Define variables to track the progress of the printing
+  let position;
+  let callback;
+
+  try {
+    // Determin whether printing text or bytes and
+    // set variables to resume accordingly
+    if (buf === undefined) {
+      callback = logLines;
+      position = lineNo;
     } else {
-      paused = false;
-      logLines(lineNo + 1);
+      callback = logBytes;
+      position = lastByte;
     }
 
-  }
+    // If the timeout has not been set yet then still waiting for the get request
+    if (lineTimeout === undefined) {
+      console.log('Still fetching your resource');
+    }
 
-  if (key === '-') {
-    clearTimeout(lineTimeout);
-    cadence += 100;
-    let left = cadence - (Date.now() - lastLog);
-    lineTimeout = setTimeout(() => {
-      logLines.call(this, lineNo + 1);
-    }, left);
-  }
+    // If space bar is pressed, pause or resume accordingly
+    if (key === ' ') {
+      if (!paused) {
+        // If process is not paused, clear the current timeout
+        clearTimeout(lineTimeout);
+        paused = true;
+      } else {
+        // If process is paused, call the necessary logging function
+        paused = false;
+        callback(position + 1);
+      }
+    }
 
-  if (key === '+' || key === '=') {
-    clearTimeout(lineTimeout);
-    cadence -= 100;
-    let left = cadence - (Date.now() - lastLog);
-    lineTimeout = setTimeout(() => {
-      logLines.call(this, lineNo + 1);
-    }, left);
+    // If - or + keys are pressed, clear the timeout, increase the cadence
+    // and restart the timeout with the time left
+    if (key === '-') {
+      clearTimeout(lineTimeout);
+      // Restart process if currently paused
+      paused = false;
+      cadence += 100;
+      // The amount of time left is the new cadence minus the time elapsed since the last log
+      let left = cadence - (Date.now() - lastLog);
+      // Ensure the time left is not negative
+      left = left > 0 ? left : 0;
+
+      lineTimeout = setTimeout(() => {
+        callback(position + 1);
+      }, left);
+    } else if (key === '+' || key === '=') {
+      clearTimeout(lineTimeout);
+      paused = false;
+      cadence -= 100;
+      let left = cadence - (Date.now() - lastLog);
+      // Ensure the time left is not negative
+      left = left > 0 ? left : 0;
+
+      lineTimeout = setTimeout(() => {
+        callback(position + 1);
+      }, left);
+    }
+  } catch (err) {
+    // Catch errors and allow process to continue
+    console.log('Please wait while we fetch your resource');
   }
 });
 
-
-try{
+try {
   https.get(process.argv[2], (res) => {
-    let data = [];
+    const data = [];
 
-    let content = res.headers['content-type'] || 'unknown';
+    const content = res.headers['content-type'] || 'unknown';
 
-    res.on('data', chunk => {
-      //console.log(line, '--->', chunk);
-      data.push(chunk)
+    res.on('data', (chunk) => {
+      // console.log(line, '--->', chunk);
+      data.push(chunk);
     });
 
     res.on('end', () => {
-      if (content.includes('text/plain')) {
+      if (content.includes('text')) {
         resource = Buffer.concat(data).toString();
         lines = resource.split('\n');
         logLines(1);
       } else if (content.includes('json')) {
         resource = JSON.parse(Buffer.concat(data).toString());
-        var buf = new Buffer(data);
-        var short_name = buf.toString('ascii', 0, 16);
-        var name = buf.toString('ascii', 16, 32);
-        console.log(short_name, name)
+        resourceLength = (new TextEncoder().encode(resource)).length;
+        buf = Buffer.concat(data);
+        logBytes(1);
       } else {
-        resource = Buffer.concat(data).toString('ascii', 0, 10);
-
-        console.log(resource)
+        resource = Buffer.concat(data).toString();
+        resourceLength = (new TextEncoder().encode(resource)).length;
+        buf = Buffer.concat(data);
+        logBytes(1);
       }
-
     });
   });
 } catch (err) {
